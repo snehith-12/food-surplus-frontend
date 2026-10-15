@@ -1,0 +1,246 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Models ─────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   // "ADMIN", "RESTAURANT", "SHELTER"
+
+  orgName     String  @map("org_name")
+  contactName String  @map("contact_name")
+  phone       String
+  address     String
+  city        String
+  state       String
+  zipCode     String  @map("zip_code")
+  latitude    Float?
+  longitude   Float?
+  isVerified  Boolean @default(false) @map("is_verified")
+  avatarUrl   String? @map("avatar_url")
+
+  // Compliance & KYC Fields
+  kycStatus     String   @default("PENDING") @map("kyc_status") // "PENDING", "VERIFIED", "REJECTED"
+  kycDocType    String?  @map("kyc_doc_type") // "12A_80G_CERTIFICATE", "TRUST_DEED", "FCRA", "SOCIETY_REGISTRATION"
+  kycDocNumber  String?  @map("kyc_doc_number")
+  kycDocUrl     String?  @map("kyc_doc_url")
+  kycNotes      String?  @map("kyc_notes")
+  
+  // Donor Tiering & Volume Scale
+  donorTier           String? @map("donor_tier") // "ENTERPRISE", "COMMERCIAL_CHAIN", "LOCAL_CAFE_BAKERY"
+  donorEstDailyVolume Int?    @map("donor_est_daily_volume") // estimated servings/day
+
+  // Actor Moderation
+  isBanned        Boolean  @default(false) @map("is_banned")
+  banReason       String?  @map("ban_reason")
+  complianceScore Int      @default(100) @map("compliance_score")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  listings             SurplusListing[]
+  claims               Claim[]
+  payments             Payment[]
+  notifications        Notification[]
+  reportedDisputes     DisputeTicket[]       @relation("ReportedDisputes")
+  targetDisputes       DisputeTicket[]       @relation("TargetDisputes")
+  razorpayTransactions RazorpayTransaction[]
+
+  @@index([role])
+  @@index([city])
+  @@index([kycStatus])
+  @@index([donorTier])
+  @@map("users")
+}
+
+model SurplusListing {
+  id       String @id @default(uuid())
+  donorId  String @map("donor_id")
+
+  title       String
+  description String?
+  category    String
+  quantity    Int
+  unit        String       @default("servings")
+
+  // ESG & Operational Attributes
+  weightKg    Float?       @map("weight_kg")
+  mealType    String?      @map("meal_type") // "COOKED_MEALS", "BAKERY", "RAW_PRODUCE", "DAIRY", "PACKAGED"
+  timeOfDay   String?      @map("time_of_day") // "MORNING", "AFTERNOON", "EVENING", "NIGHT"
+
+  pickupAddress   String  @map("pickup_address")
+  pickupLatitude  Float?  @map("pickup_latitude")
+  pickupLongitude Float?  @map("pickup_longitude")
+
+  pickupWindowStart DateTime @map("pickup_window_start")
+  pickupWindowEnd   DateTime @map("pickup_window_end")
+  expiryDate        DateTime @map("expiry_date")
+
+  dietaryInfo String @default("") @map("dietary_info")
+  allergens   String @default("")
+  imageUrl    String?  @map("image_url")
+
+  status String @default("AVAILABLE") // "AVAILABLE", "CLAIMED", "PICKED_UP", "CANCELLED", "EXPIRED", "REMOVED_BY_ADMIN"
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  donor                User                  @relation(fields: [donorId], references: [id], onDelete: Cascade)
+  claims               Claim[]
+  payments             Payment[]
+  disputes             DisputeTicket[]
+  razorpayTransactions RazorpayTransaction[]
+
+  @@index([donorId])
+  @@index([status])
+  @@index([category])
+  @@index([expiryDate])
+  @@index([pickupWindowStart, pickupWindowEnd])
+  @@map("surplus_listings")
+}
+
+model Claim {
+  id        String @id @default(uuid())
+  listingId String @map("listing_id")
+  shelterId String @map("shelter_id")
+
+  status          String @default("PENDING")
+  quantityClaimed Int    @map("quantity_claimed")
+  pickupEta       DateTime?   @map("pickup_eta")
+  notes           String?
+  donorNotes      String?     @map("donor_notes")
+  pickedUpAt      DateTime?   @map("picked_up_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  listing SurplusListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  shelter User           @relation(fields: [shelterId], references: [id], onDelete: Cascade)
+
+  @@unique([listingId, shelterId])
+  @@index([listingId])
+  @@index([shelterId])
+  @@index([status])
+  @@map("claims")
+}
+
+model Payment {
+  id        String   @id @default(uuid())
+  orderId   String   @unique @map("order_id")
+  paymentId String?  @map("payment_id")
+  signature String?
+  amount    Float    // In INR ₹ (e.g. 20.00)
+  currency  String   @default("INR")
+  status    String   @default("PENDING") // "PENDING", "SUCCESS", "FAILED"
+
+  listingId String   @map("listing_id")
+  userId    String   @map("user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  listing SurplusListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([paymentId])
+  @@index([status])
+  @@index([listingId])
+  @@index([userId])
+  @@map("payments")
+}
+
+model RazorpayTransaction {
+  id                String   @id @default(uuid())
+  razorpayPaymentId String?  @unique @map("razorpay_payment_id")
+  razorpayOrderId   String?  @map("razorpay_order_id")
+  razorpaySignature String?  @map("razorpay_signature")
+  amount            Float    // in INR ₹
+  currency          String   @default("INR")
+  status            String   // "CAPTURED", "FAILED", "PENDING", "REFUNDED"
+  feeType           String   @default("PLATFORM_FEE") @map("fee_type")
+  webhookStatus     String   @default("SUCCESS") @map("webhook_status") // "SUCCESS", "FAILED_WEBHOOK", "RETRYING"
+  failureReason     String?  @map("failure_reason")
+  
+  userId            String?  @map("user_id")
+  listingId         String?  @map("listing_id")
+  shelterName       String?  @map("shelter_name")
+  donorName         String?  @map("donor_name")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user    User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  listing SurplusListing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([userId])
+  @@index([listingId])
+  @@index([webhookStatus])
+  @@map("razorpay_transactions")
+}
+
+model DisputeTicket {
+  id           String    @id @default(uuid())
+  ticketNumber String    @unique @map("ticket_number")
+  claimId      String?   @map("claim_id")
+  listingId    String?   @map("listing_id")
+  reportedById String    @map("reported_by_id")
+  targetUserId String?   @map("target_user_id")
+
+  category    String    // "FOOD_DISCARDED", "FOOD_SPOILED", "NO_SHOW", "QUANTITY_MISMATCH", "UNREACHABLE", "OTHER"
+  priority    String    @default("MEDIUM") // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+  status      String    @default("OPEN") // "OPEN", "INVESTIGATING", "RESOLVED", "DISMISSED"
+  description String
+  evidenceUrl String?   @map("evidence_url")
+  adminNotes  String?   @map("admin_notes")
+  resolution  String?
+  resolvedAt  DateTime? @map("resolved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  reportedBy User            @relation("ReportedDisputes", fields: [reportedById], references: [id], onDelete: Cascade)
+  targetUser User?           @relation("TargetDisputes", fields: [targetUserId], references: [id], onDelete: SetNull)
+  listing    SurplusListing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([priority])
+  @@index([category])
+  @@index([reportedById])
+  @@index([targetUserId])
+  @@map("dispute_tickets")
+}
+
+model Notification {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+
+  type        String
+  title       String
+  message     String
+  referenceId String?          @map("reference_id")
+  isRead      Boolean          @default(false) @map("is_read")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
